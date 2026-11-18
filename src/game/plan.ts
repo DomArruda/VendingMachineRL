@@ -96,7 +96,8 @@ export function planStock(plan: Plan, machine: MachineState): number {
 export function addItem(
   plan: Plan,
   itemId: string,
-  wholesale: Record<string, number>
+  wholesale: Record<string, number>,
+  cashAvailable: number
 ): Plan {
   if (plan.some((slot) => slot?.itemId === itemId)) return plan;
   const index = plan.findIndex((slot) => slot === null);
@@ -106,7 +107,10 @@ export function addItem(
   next[index] = {
     itemId,
     price: suggestedPrice(item, wholesale[itemId]),
-    buy: 5,
+    buy: Math.min(
+      5,
+      Math.floor((Math.max(0, cashAvailable) + 1e-9) / wholesale[itemId])
+    ),
     refill: 0,
   };
   return next;

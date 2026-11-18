@@ -634,6 +634,37 @@ progress {
   gap: 10px;
 }
 
+.slots-panel .panel-head {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.machine-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.machine-heading h2 {
+  margin-bottom: 0;
+}
+
+.machine-heading small {
+  font-size: 9px;
+}
+
+.machine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.machine-actions button {
+  padding: 4px 7px;
+  font-size: 9px;
+}
+
 .catalog-controls {
   display: flex;
   align-items: end;
@@ -733,6 +764,16 @@ progress {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.item-name[draggable="true"],
+.backstock-count[draggable="true"] {
+  cursor: grab;
+}
+
+.item-name[draggable="true"]:active,
+.backstock-count[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .item-name > span:last-child {

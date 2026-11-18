@@ -30,6 +30,7 @@ interface PlanningProps {
 
 type SortKey = "name" | "cost" | "suggested" | "margin" | "popularity" | "sensitivity";
 type SortDirection = "asc" | "desc";
+type DragSource = "wholesale" | "backstock";
 
 function money(value: number): string {
   return value < 0
@@ -89,6 +90,14 @@ export default function Planning({
     (total, qty) => total + qty,
     0
   );
+  const canRefillAll = plan.some((slot) => {
+    if (!slot) return false;
+    const held = qtyOf(game.machine, slot.itemId);
+    const available =
+      (game.machine.warehouse[slot.itemId] ?? 0) +
+      (warehouseBuys[slot.itemId] ?? 0);
+    return Math.min(CONFIG.SLOT_CAP - held, available) > slot.refill;
+  });
 
   const catalog = useMemo(() => {
     const rows = ITEMS.map((item) => {
@@ -132,6 +141,22 @@ export default function Planning({
     if (existing > 0) {
       delete next[itemId];
       setWarehouseBuys(next);
+      setPlan(
+        plan.map((slot) => {
+          if (!slot || slot.itemId !== itemId) return slot;
+          const held = qtyOf(game.machine, itemId);
+          const refill = Math.min(
+            slot.refill,
+            Math.max(0, CONFIG.SLOT_CAP - held),
+            game.machine.warehouse[itemId] ?? 0
+          );
+          return {
+            ...slot,
+            refill,
+            buy: Math.min(slot.buy, maxBuy(itemId, game.machine, refill)),
+          };
+        })
+      );
       return;
     }
 
@@ -157,6 +182,67 @@ export default function Planning({
       next[item.id] = maxQty;
       setWarehouseBuys(next);
     }
+  };
+
+  const placeItem = (itemId: string, source: DragSource): void => {
+    const item = ITEM_BY_ID[itemId];
+    if (!item) return;
+
+    const backstock =
+      (game.machine.warehouse[itemId] ?? 0) + (warehouseBuys[itemId] ?? 0);
+    const plannedIndex = plan.findIndex((slot) => slot?.itemId === itemId);
+    if (plannedIndex >= 0) {
+      if (source !== "backstock") return;
+      const slot = plan[plannedIndex];
+      if (!slot) return;
+      const refill = Math.min(
+        Math.max(0, CONFIG.SLOT_CAP - qtyOf(game.machine, itemId)),
+        backstock
+      );
+      setPlan(
+        updateSlot(plan, plannedIndex, {
+          refill,
+          buy: Math.min(slot.buy, maxBuy(itemId, game.machine, refill)),
+        })
+      );
+      return;
+    }
+
+    const machineIndex = game.machine.slots.findIndex(
+      (slot) => slot.itemId === itemId
+    );
+    if (machineIndex >= 0) {
+      if (plan[machineIndex] !== null) return;
+      const machineSlot = game.machine.slots[machineIndex];
+      const suggested = suggestedPrice(item, wholesale[itemId]);
+      const refill =
+        source === "backstock"
+          ? Math.min(CONFIG.SLOT_CAP - machineSlot.qty, backstock)
+          : 0;
+      const next = [...plan];
+      next[machineIndex] = {
+        itemId,
+        price: clampPrice(machineSlot.price || suggested, suggested),
+        buy: 0,
+        refill,
+      };
+      setPlan(next);
+      return;
+    }
+
+    const next = addItem(
+      plan,
+      itemId,
+      wholesale,
+      source === "wholesale" ? Math.max(0, cash - spend) : 0
+    );
+    if (source === "backstock") {
+      const index = next.findIndex((slot) => slot?.itemId === itemId);
+      const slot = next[index];
+      if (index < 0 || !slot) return;
+      next[index] = { ...slot, refill: Math.min(CONFIG.SLOT_CAP, backstock) };
+    }
+    setPlan(next);
   };
 
   const refillSlotToMax = (index: number): void => {
@@ -233,17 +319,52 @@ export default function Planning({
       <div className="planning-grid">
         <section className="panel slots-panel">
           <div className="panel-head">
-            <h2>Your machine</h2>
-            <button
-              className="ghost"
-              title="Fill only empty slots with random unique items. Quantity is limited by remaining cash."
-              onClick={randomFillBlanks}
-              disabled={freeSlots === 0 || cash - spend <= 0}
-            >
-              Random fill empty slots
-            </button>
+            <div className="machine-heading">
+              <h2>Your machine</h2>
+              <small className="sub">
+                {CONFIG.SLOTS} slots · one slot per item · {CONFIG.SLOT_CAP}{" "}
+                units max each · drop wholesale or backstock here
+              </small>
+            </div>
+            <div className="machine-actions">
+              <button
+                className="ghost"
+                title={
+                  canRefillAll
+                    ? `Move available backstock into each matching machine slot, up to its ${CONFIG.SLOT_CAP}-unit limit.`
+                    : "No backstock can be moved into the machine right now."
+                }
+                onClick={refillAll}
+                disabled={!canRefillAll}
+              >
+                Refill all
+              </button>
+              <button
+                className="ghost"
+                title="Fill only empty slots with random unique items. Quantity is limited by remaining cash."
+                onClick={randomFillBlanks}
+                disabled={freeSlots === 0 || cash - spend <= 0}
+              >
+                Random fill empty slots
+              </button>
+            </div>
           </div>
-          <div className="slot-grid">
+          <div
+            className="slot-grid"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const [source, itemId] = event.dataTransfer
+                .getData("text/plain")
+                .split(":", 2);
+              if (
+                (source === "wholesale" || source === "backstock") &&
+                ITEM_BY_ID[itemId]
+              ) {
+                placeItem(itemId, source);
+              }
+            }}
+          >
             {plan.map((slot, index) => {
               if (!slot) {
                 return (
@@ -271,8 +392,9 @@ export default function Planning({
                     <div>
                       <strong>{item.name}</strong>
                       <small>
-                        {item.category} · machine {held} · reserve {backstock}
-                        {pendingBackstock > 0 ? ` (+${pendingBackstock})` : ""}
+                        {item.category} · machine {held}/{CONFIG.SLOT_CAP} ·
+                        backstock {backstock}
+                        {pendingBackstock > 0 ? ` (+${pendingBackstock} planned)` : ""}
                       </small>
                     </div>
                     <button
@@ -308,9 +430,9 @@ export default function Planning({
                     </button>
                     <span
                       className="buy-value"
-                      title="Buy units directly into this machine"
+                      title="Units planned for direct purchase into this machine."
                     >
-                      Direct +{slot.buy}
+                      Buy now +{slot.buy}
                     </span>
                     <button
                       onClick={() =>
@@ -323,12 +445,25 @@ export default function Planning({
                     >
                       +
                     </button>
-                    <small>max {max}</small>
+                    <small
+                      title="Maximum direct units allowed by this item's slot capacity. Cash can limit the actual purchase."
+                    >
+                      max buy {max}
+                    </small>
                   </div>
                   <div className="refill-row">
-                    <span>Refill +{slot.refill}</span>
+                    <span>From backstock +{slot.refill}</span>
                     <button
                       className="ghost"
+                      title={
+                        slot.refill > 0
+                          ? "Undo the planned move from backstock."
+                          : refillMax > 0
+                            ? `Move ${refillMax} backstock units into this machine slot.`
+                            : held >= CONFIG.SLOT_CAP
+                              ? "This item's machine slot is full."
+                              : "No backstock available. Use Buy max to backstock in the catalog first."
+                      }
                       onClick={() => {
                         if (slot.refill > 0) {
                           setPlan(updateSlot(plan, index, { refill: 0 }));
@@ -338,7 +473,13 @@ export default function Planning({
                       }}
                       disabled={slot.refill === 0 && refillMax <= 0}
                     >
-                      {slot.refill > 0 ? "Undo refill" : "Refill to max"}
+                      {slot.refill > 0
+                        ? "Undo refill"
+                        : refillMax > 0
+                          ? `Move +${refillMax}`
+                          : held >= CONFIG.SLOT_CAP
+                            ? "Full"
+                            : "No backstock"}
                     </button>
                   </div>
                   {held === 0 && slot.buy === 0 && slot.refill === 0 && (
@@ -415,25 +556,10 @@ export default function Planning({
           </div>
 
           <div className="backstock-bar">
-            <span>
-              Backstock: {currentWarehouse}/{CONFIG.WAREHOUSE_CAP} units
+            <span title="Backstock is stored outside the machine. Use Refill all or drag a backstock quantity into the machine.">
+              Backstock: {currentWarehouse}/{CONFIG.WAREHOUSE_CAP} units · stored separately
               {plannedWarehouseUnits > 0 ? ` · buy +${plannedWarehouseUnits}` : ""}
             </span>
-            <button
-              className="ghost"
-              onClick={refillAll}
-              disabled={
-                !plan.some(
-                  (slot) =>
-                    slot &&
-                    (game.machine.warehouse[slot.itemId] ?? 0) +
-                      (warehouseBuys[slot.itemId] ?? 0) >
-                      slot.refill
-                )
-              }
-            >
-              Refill machine from backstock
-            </button>
           </div>
 
           <div className="item-table">
@@ -444,10 +570,10 @@ export default function Planning({
               <span>Margin</span>
               <span>Demand</span>
               <span title="Customer response to price changes">Price sens.</span>
-              <span className="backstock-heading">Reserve</span>
+              <span className="backstock-heading">Backstock</span>
               <span>Trend</span>
               <span>Machine</span>
-              <span>Store</span>
+              <span>Backstock buy</span>
             </div>
             {catalog.map(({ item, cost, suggested, margin }) => {
               const inPlan = stocked.has(item.id);
@@ -466,6 +592,19 @@ export default function Planning({
               ).slice(-30);
               const backstock = game.machine.warehouse[item.id] ?? 0;
               const planned = warehouseBuys[item.id] ?? 0;
+              const backstockAvailable = backstock + planned;
+              const plannedSlot = plan.find((slot) => slot?.itemId === item.id);
+              const canDragWholesale =
+                !inPlan &&
+                (existingSlot ? canRestore : freeSlots > 0);
+              const canDragBackstock =
+                backstockAvailable > 0 &&
+                (inPlan
+                  ? Math.min(
+                      CONFIG.SLOT_CAP - qtyOf(game.machine, item.id),
+                      backstockAvailable
+                    ) > (plannedSlot?.refill ?? 0)
+                  : canDragWholesale);
               const otherPendingUnits = plannedWarehouseUnits - planned;
               const otherPendingSpend = Object.entries(warehouseBuys)
                 .filter(([id]) => id !== item.id)
@@ -484,7 +623,22 @@ export default function Planning({
               );
               return (
                 <div className="item-row" key={item.id}>
-                  <span className="item-name">
+                  <span
+                    className="item-name"
+                    draggable={canDragWholesale}
+                    title={
+                      existingSlot
+                        ? "Drag to restore this item's existing machine slot."
+                        : "Drag to the machine to buy up to 5 units, limited by available cash."
+                    }
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "copy";
+                      event.dataTransfer.setData(
+                        "text/plain",
+                        `wholesale:${item.id}`
+                      );
+                    }}
+                  >
                     <span className="icon">{item.icon}</span>
                     <span>
                       <strong>{item.name}</strong>
@@ -500,7 +654,18 @@ export default function Planning({
                   <span className="tag" title="Price sensitivity">
                     {sensitivity(item.elasticity)}
                   </span>
-                  <span className="backstock-count">
+                  <span
+                    className="backstock-count"
+                    draggable={canDragBackstock}
+                    title="Drag this quantity to add or refill this item using available backstock."
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData(
+                        "text/plain",
+                        `backstock:${item.id}`
+                      );
+                    }}
+                  >
                     {backstock}
                     {planned > 0 && <small>+{planned}</small>}
                   </span>
@@ -511,29 +676,12 @@ export default function Planning({
                     />
                   </span>
                   <button
-                    onClick={() => {
-                      if (existingSlot) {
-                        if (!canRestore) return;
-                        const index = existingSlotIndex;
-                        const next = [...plan];
-                        next[index] = {
-                          itemId: item.id,
-                          price: clampPrice(
-                            existingSlot.price || suggested,
-                            suggested
-                          ),
-                          buy: 0,
-                          refill: 0,
-                        };
-                        setPlan(next);
-                      } else {
-                        setPlan(addItem(plan, item.id, wholesale));
-                      }
-                    }}
+                    onClick={() => placeItem(item.id, "wholesale")}
                     disabled={
                       inPlan ||
                       (existingSlot ? !canRestore : freeSlots === 0)
                     }
+                    title="Add this product to the machine and buy up to 5 units, limited by available cash."
                   >
                     {inPlan
                       ? "Stocked"
@@ -549,7 +697,7 @@ export default function Planning({
                     className="ghost"
                     onClick={() => toggleWarehouseBuy(item.id)}
                     disabled={planned === 0 && maxStorageBuy <= 0}
-                    title="Buy as many units as cash and backstock capacity allow"
+                    title="Buy as many units as cash and storage capacity allow. Adds to backstock only; use Refill all or drag backstock into the machine to stock it."
                   >
                     {planned > 0 ? `Cancel +${planned}` : "Buy max"}
                   </button>

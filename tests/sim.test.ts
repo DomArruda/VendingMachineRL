@@ -10,6 +10,7 @@ import {
 import { chooseHeuristic } from "../src/sim/heuristics";
 import { ITEMS } from "../src/sim/items";
 import {
+  addItem,
   planSpend,
   randomlyFillBlankSlots,
 } from "../src/game/plan";
@@ -40,6 +41,17 @@ function assertMachineLimits(machine: ReturnType<typeof createMachine>) {
 }
 
 describe("simulation", () => {
+  test("adding a wholesale item plans up to five units within available cash", () => {
+    const plan = Array.from({ length: CONFIG.SLOTS }, () => null);
+    const wholesale = Object.fromEntries(ITEMS.map((item) => [item.id, 1]));
+
+    expect(addItem(plan, "cola", wholesale, 5)[0]?.buy).toBe(5);
+    expect(addItem(plan, "cola", wholesale, 3.99)[0]?.buy).toBe(3);
+    expect(addItem(plan, "cola", wholesale, 0)[0]?.buy).toBe(0);
+    const stocked = addItem(plan, "cola", wholesale, 5);
+    expect(addItem(stocked, "cola", wholesale, 20)).toBe(stocked);
+  });
+
   test("same seed and decisions produce an identical day", () => {
     const gameA = createGame(123);
     const gameB = createGame(123);
