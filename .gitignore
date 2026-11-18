@@ -1,5 +1,6 @@
 node_modules/
 dist/
+tmp-policy.json
 *.local
 .env*
 .DS_Store

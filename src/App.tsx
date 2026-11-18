@@ -19,6 +19,14 @@ import type {
   WorkerTrainConfig,
 } from "./rl/protocol";
 import TrainerWorker from "./rl/trainer.worker?worker&inline";
+import {
+  clearSavedPolicies,
+  listSavedPolicies,
+  loadSavedPolicy,
+  savePolicy,
+  type SavedPolicySummary,
+} from "./rl/policyStore";
+import type { PolicyMetadata } from "./rl/policyMetadata";
 import { CONFIG } from "./sim/config";
 import type { DayStats } from "./sim/day";
 import {
@@ -39,7 +47,9 @@ function randomSeed(): number {
   return Math.floor(Math.random() * 1_000_000_000);
 }
 
-function fastConfig(): WorkerTrainConfig {
+const BUNDLED_POLICY_ID = "__bundled_ppo__";
+
+function fastConfig(policyName: string): WorkerTrainConfig {
   return {
     iterations: 60,
     envs: 16,
@@ -56,12 +66,13 @@ function fastConfig(): WorkerTrainConfig {
     evalSeeds: 16,
     bcEpisodes: 100,
     bcEpochs: 3,
+    policyName,
   };
 }
 
-function standardConfig(): WorkerTrainConfig {
+function standardConfig(policyName: string): WorkerTrainConfig {
   return {
-    ...fastConfig(),
+    ...fastConfig(policyName),
     iterations: 120,
     epochs: 3,
     bcEpisodes: 200,
@@ -73,6 +84,12 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("home");
   const [workerReady, setWorkerReady] = useState(false);
   const [hasModel, setHasModel] = useState(false);
+  const [savedPolicies, setSavedPolicies] = useState<SavedPolicySummary[]>([]);
+  const [policiesLoaded, setPoliciesLoaded] = useState(false);
+  const [selectedPolicy, setSelectedPolicy] = useState(BUNDLED_POLICY_ID);
+  const [activePolicy, setActivePolicy] = useState(BUNDLED_POLICY_ID);
+  const [policyMetadata, setPolicyMetadata] = useState<PolicyMetadata | null>(null);
+  const [loadingPolicy, setLoadingPolicy] = useState(false);
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>("idle");
   const [progress, setProgress] = useState<TrainProgress | null>(null);
   const [bc, setBc] = useState<{ epoch: number; loss: number } | null>(null);
@@ -96,10 +113,16 @@ export default function App() {
   const [replaySpeed, setReplaySpeed] = useState(1);
 
   const workerRef = useRef<Worker | null>(null);
+  const trainingStatusRef = useRef<TrainingStatus>("idle");
   const pendingRef = useRef<{
     resolve: (action: RLAction | null) => void;
     timer: number;
   } | null>(null);
+
+  function updateTrainingStatus(status: TrainingStatus): void {
+    trainingStatusRef.current = status;
+    setTrainingStatus(status);
+  }
 
   useEffect(() => {
     const worker = new TrainerWorker();
@@ -109,6 +132,11 @@ export default function App() {
       if (message.type === "ready") {
         setWorkerReady(true);
         setHasModel(message.hasModel);
+        if (message.hasModel) {
+          setActivePolicy(BUNDLED_POLICY_ID);
+          setSelectedPolicy(BUNDLED_POLICY_ID);
+          setPolicyMetadata(message.metadata ?? null);
+        }
       } else if (message.type === "progress") {
         const next = message.progress;
         setProgress(next);
@@ -125,9 +153,24 @@ export default function App() {
       } else if (message.type === "bc") {
         setBc({ epoch: message.epoch, loss: message.loss });
       } else if (message.type === "done") {
-        setTrainingStatus("done");
+        updateTrainingStatus("done");
         setTrainResult(message.result);
         setHasModel(true);
+        setActivePolicy(message.result.policyName);
+        setSelectedPolicy(message.result.policyName);
+        setPolicyMetadata(message.result.policy.metadata ?? null);
+        void savePolicy(message.result.policyName, message.result.policy)
+          .then(async () => setSavedPolicies(await listSavedPolicies()))
+          .catch((saveError: unknown) =>
+            setError(`Agent is trained but could not be saved locally: ${saveError}`)
+          );
+      } else if (message.type === "policy-loaded") {
+        setActivePolicy(
+          message.name === "Bundled PPO" ? BUNDLED_POLICY_ID : message.name
+        );
+        setPolicyMetadata(message.metadata ?? null);
+        setHasModel(true);
+        setLoadingPolicy(false);
       } else if (message.type === "decision") {
         const pending = pendingRef.current;
         if (pending) {
@@ -136,12 +179,18 @@ export default function App() {
           pending.resolve(message.action);
         }
       } else if (message.type === "paused") {
-        setTrainingStatus("paused");
+        updateTrainingStatus("paused");
       } else if (message.type === "resumed") {
-        setTrainingStatus("running");
+        updateTrainingStatus("running");
       } else if (message.type === "error") {
         setError(message.message);
-        if (trainingStatus === "running") setTrainingStatus("idle");
+        setLoadingPolicy(false);
+        if (
+          trainingStatusRef.current === "running" ||
+          trainingStatusRef.current === "paused"
+        ) {
+          updateTrainingStatus("idle");
+        }
       }
     };
     return () => {
@@ -154,6 +203,15 @@ export default function App() {
       workerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    void listSavedPolicies()
+      .then(setSavedPolicies)
+      .catch((storageError: unknown) =>
+        setError(`Could not read saved agents: ${storageError}`)
+      )
+      .finally(() => setPoliciesLoaded(true));
   }, []);
 
   function requestAgentDecision(game: GameState): Promise<RLAction | null> {
@@ -287,12 +345,78 @@ export default function App() {
     setScreen("summary");
   }
 
-  function startTraining(preset: "fast" | "standard"): void {
-    if (!workerReady) {
-      setError("The agent worker is still loading. Try again in a moment.");
+  async function loadSelectedPolicy(): Promise<void> {
+    if (
+      !workerReady ||
+      !workerRef.current ||
+      trainingStatus === "running" ||
+      trainingStatus === "paused"
+    ) {
       return;
     }
-    setTrainingStatus("running");
+    setLoadingPolicy(true);
+    setError(null);
+    if (selectedPolicy === BUNDLED_POLICY_ID) {
+      workerRef.current.postMessage({ type: "load-pretrained" } satisfies WorkerRequest);
+      return;
+    }
+    try {
+      const policy = await loadSavedPolicy(selectedPolicy);
+      if (!policy) throw new Error("That saved model no longer exists");
+      workerRef.current.postMessage({
+        type: "load-policy",
+        name: selectedPolicy,
+        policy,
+      } satisfies WorkerRequest);
+    } catch (loadError) {
+      setLoadingPolicy(false);
+      setError(`Could not load saved agent: ${loadError}`);
+    }
+  }
+
+  async function clearSavedModels(): Promise<void> {
+    if (
+      !workerReady ||
+      savedPolicies.length === 0 ||
+      trainingStatus === "running" ||
+      trainingStatus === "paused" ||
+      !window.confirm("Clear saved trained agents? The bundled pretrained PPO stays available.")
+    ) {
+      return;
+    }
+    setLoadingPolicy(true);
+    setError(null);
+    try {
+      await clearSavedPolicies();
+      setSavedPolicies([]);
+      setSelectedPolicy(BUNDLED_POLICY_ID);
+      workerRef.current?.postMessage({ type: "load-pretrained" } satisfies WorkerRequest);
+    } catch (clearError) {
+      setLoadingPolicy(false);
+      setError(`Could not clear saved agents: ${clearError}`);
+    }
+  }
+
+  function startTraining(preset: "fast" | "standard", policyName: string): void {
+    if (!workerReady || !policiesLoaded) {
+      setError("The agent or saved-model list is still loading. Try again shortly.");
+      return;
+    }
+    const name = policyName.trim();
+    if (
+      !name ||
+      name.length > 40 ||
+      name.toLowerCase() === "bundled ppo" ||
+      name.toLowerCase() === BUNDLED_POLICY_ID
+    ) {
+      setError("Use a saved-agent name from 1 to 40 characters other than Bundled PPO.");
+      return;
+    }
+    if (savedPolicies.some((policy) => policy.name === name)) {
+      setError("That agent name already exists. Choose a new name to keep both policies.");
+      return;
+    }
+    updateTrainingStatus("running");
     setProgress(null);
     setBc(null);
     setTrainResult(null);
@@ -302,14 +426,28 @@ export default function App() {
     setError(null);
     const request: WorkerRequest = {
       type: "train",
-      config: preset === "fast" ? fastConfig() : standardConfig(),
+      config:
+        preset === "fast"
+          ? fastConfig(name)
+          : standardConfig(name),
     };
     workerRef.current?.postMessage(request);
   }
 
   const trainingActive =
     trainingStatus === "running" || trainingStatus === "paused";
-  const canPlay = workerReady && hasModel && !trainingActive;
+  const canPlay = workerReady && hasModel && !trainingActive && !loadingPolicy;
+  const savedNames = new Set(savedPolicies.map((policy) => policy.name));
+  let suggestedNumber = savedPolicies.length + 1;
+  while (savedNames.has(`PPO run ${suggestedNumber}`)) suggestedNumber++;
+  const suggestedPolicyName = `PPO run ${suggestedNumber}`;
+  const evaluationMean =
+    policyMetadata?.evaluation.heldOutMeanProfit ??
+    policyMetadata?.evaluation.fixedEvaluationMeanProfit;
+  const evaluationGames =
+    policyMetadata?.evaluation.heldOutSimulations ??
+    policyMetadata?.evaluation.fixedEvaluationSimulations;
+  const greedyMean = policyMetadata?.evaluation.greedyExpertMeanProfit;
 
   return (
     <>
@@ -350,13 +488,63 @@ export default function App() {
               Choose 12 items, buy stock, set prices, and try to out-earn it
               over 15 days.
             </p>
+            <div className="policy-picker">
+              <label>
+                <span className="sub">Opponent model</span>
+                <select
+                  value={selectedPolicy}
+                  onChange={(event) => setSelectedPolicy(event.target.value)}
+                  disabled={!workerReady || trainingActive || loadingPolicy}
+                >
+                  <option value={BUNDLED_POLICY_ID}>Bundled PPO</option>
+                  {savedPolicies.map((policy) => (
+                    <option key={policy.name} value={policy.name}>
+                      {policy.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="ghost"
+                onClick={() => void loadSelectedPolicy()}
+                disabled={
+                  !workerReady ||
+                  loadingPolicy ||
+                  trainingActive ||
+                  selectedPolicy === activePolicy
+                }
+              >
+                {loadingPolicy ? "Loading..." : "Load selected"}
+              </button>
+              <button
+                className="ghost"
+                onClick={() => void clearSavedModels()}
+                disabled={!workerReady || savedPolicies.length === 0 || trainingActive || loadingPolicy}
+                title="Deletes locally saved trained agents; keeps bundled PPO."
+              >
+                Clear saved (keep bundled)
+              </button>
+            </div>
+            <p className="sub policy-status">
+              Active agent: {activePolicy === BUNDLED_POLICY_ID ? "Bundled PPO" : activePolicy}
+              {loadingPolicy ? " · loading selection" : ""}
+            </p>
+            {policyMetadata && (
+              <p className="sub policy-status">
+                Trained with {policyMetadata.training.expertGames ?? "—"} expert games +{" "}
+                {policyMetadata.training.ppoIterations ?? "—"} PPO updates.
+                {typeof evaluationMean === "number" && typeof greedyMean === "number"
+                  ? ` Evaluation (${evaluationGames} simulations): $${evaluationMean.toFixed(2)} vs greedy $${greedyMean.toFixed(2)}.`
+                  : ""}
+              </p>
+            )}
             <div className="button-row">
               <button
                 className="primary"
                 disabled={!canPlay}
                 onClick={() => beginGame(randomSeed())}
               >
-                Play vs trained agent
+                Play vs selected agent
               </button>
               <button
                 className="ghost"
@@ -372,7 +560,7 @@ export default function App() {
                   ? "Training is running. Pause or stop it to play the new agent."
                   : !hasModel
                     ? "The pretrained agent could not load. Train a new PPO agent below."
-                    : "The opponent is a small neural policy trained in your browser with PPO, not an LLM. A pretrained agent is ready now."}
+                    : "The opponent is a small neural policy trained in your browser with PPO, not an LLM. Custom saved agents are stored only in this browser."}
             </p>
             <div className="home-points">
               <div>
@@ -407,14 +595,16 @@ export default function App() {
           trainPoints={trainPoints}
           greedy={greedy}
           hasModel={hasModel}
-          onStart={(preset) => startTraining(preset)}
+          ready={workerReady && policiesLoaded}
+          suggestedName={suggestedPolicyName}
+          onStart={(preset, name) => startTraining(preset, name)}
           onPause={() => {
             workerRef.current?.postMessage({ type: "pause" } satisfies WorkerRequest);
-            setTrainingStatus("paused");
+            updateTrainingStatus("paused");
           }}
           onResume={() => {
             workerRef.current?.postMessage({ type: "resume" } satisfies WorkerRequest);
-            setTrainingStatus("running");
+            updateTrainingStatus("running");
           }}
           onStop={() => {
             workerRef.current?.postMessage({ type: "stop" } satisfies WorkerRequest);

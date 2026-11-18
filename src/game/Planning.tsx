@@ -235,11 +235,12 @@ export default function Planning({
           <div className="panel-head">
             <h2>Your machine</h2>
             <button
+              className="ghost"
               title="Fill only empty slots with random unique items. Quantity is limited by remaining cash."
               onClick={randomFillBlanks}
               disabled={freeSlots === 0 || cash - spend <= 0}
             >
-              Randomly fill blanks
+              Random fill empty slots
             </button>
           </div>
           <div className="slot-grid">
@@ -305,7 +306,12 @@ export default function Planning({
                     >
                       −
                     </button>
-                    <span className="buy-value">Buy {slot.buy}</span>
+                    <span
+                      className="buy-value"
+                      title="Buy units directly into this machine"
+                    >
+                      Direct +{slot.buy}
+                    </span>
                     <button
                       onClick={() =>
                         setPlan(
@@ -426,7 +432,7 @@ export default function Planning({
                 )
               }
             >
-              Refill all stocked items
+              Refill machine from backstock
             </button>
           </div>
 
@@ -437,11 +443,11 @@ export default function Planning({
               <span>Suggested</span>
               <span>Margin</span>
               <span>Demand</span>
-              <span>Elasticity</span>
-              <span>Backstock</span>
-              <span />
-              <span />
-              <span />
+              <span title="Customer response to price changes">Price sens.</span>
+              <span className="backstock-heading">Reserve</span>
+              <span>Trend</span>
+              <span>Machine</span>
+              <span>Store</span>
             </div>
             {catalog.map(({ item, cost, suggested, margin }) => {
               const inPlan = stocked.has(item.id);
@@ -491,7 +497,9 @@ export default function Planning({
                     {money(margin)}
                   </span>
                   <span className="stars">{stars(item.popularity)}</span>
-                  <span className="tag">{sensitivity(item.elasticity)}</span>
+                  <span className="tag" title="Price sensitivity">
+                    {sensitivity(item.elasticity)}
+                  </span>
                   <span className="backstock-count">
                     {backstock}
                     {planned > 0 && <small>+{planned}</small>}
@@ -535,10 +543,10 @@ export default function Planning({
                           : "Slot used"
                         : freeSlots === 0
                           ? "Full"
-                          : "Stock"}
+                          : "Add slot"}
                   </button>
                   <button
-                    className={planned > 0 ? "ghost" : undefined}
+                    className="ghost"
                     onClick={() => toggleWarehouseBuy(item.id)}
                     disabled={planned === 0 && maxStorageBuy <= 0}
                     title="Buy as many units as cash and backstock capacity allow"

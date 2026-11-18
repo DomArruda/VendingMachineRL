@@ -281,6 +281,41 @@ button:disabled {
   line-height: 1.55;
 }
 
+.policy-picker {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+  margin: 14px 0 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(9, 14, 23, 0.5);
+}
+
+.policy-picker label,
+.policy-name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.policy-picker select,
+.policy-name-field input {
+  min-width: 0;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: #101827;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 10px;
+}
+
+.policy-status {
+  margin: 5px 0;
+}
+
 /* Training */
 
 .training-card {
@@ -339,6 +374,10 @@ button:disabled {
 
 .training-settings strong {
   font-size: 12px;
+}
+
+.policy-name-field {
+  margin: 12px 0;
 }
 
 .metric-grid {
@@ -644,12 +683,20 @@ progress {
 
 .backstock-count {
   color: #cbd5e1;
+  border-left: 1px solid #334155;
+  padding-left: 8px;
 }
 
 .backstock-count small {
   display: block;
   color: var(--green);
   font-size: 8px;
+  white-space: nowrap;
+}
+
+.item-header > .backstock-heading {
+  border-left: 1px solid #334155;
+  padding-left: 8px;
   white-space: nowrap;
 }
 
@@ -661,8 +708,9 @@ progress {
 
 .item-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.7fr) 50px 65px 55px 55px 52px 52px 72px 58px 76px;
-  gap: 6px;
+  grid-template-columns: minmax(130px, 1.7fr) 44px 58px 50px 50px 58px 65px 64px 62px 76px;
+  column-gap: 6px;
+  row-gap: 6px;
   align-items: center;
   padding: 5px 4px;
   border-bottom: 1px solid #182131;
@@ -750,6 +798,13 @@ progress {
   font-size: 30px;
   display: block;
   font-weight: 600;
+}
+
+.running-total {
+  display: block;
+  margin-top: 5px;
+  color: #cbd5e1;
+  font-size: 11px;
 }
 
 .result-card.human {
@@ -937,6 +992,10 @@ progress {
   }
 
   .home-points {
+    grid-template-columns: 1fr;
+  }
+
+  .policy-picker {
     grid-template-columns: 1fr;
   }
 

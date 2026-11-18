@@ -7,7 +7,7 @@ const data = JSON.parse(readFileSync(path, "utf8")) as {
   metadata?: Record<string, unknown>;
   weights: { values: number[] }[];
 };
-data.metadata = {
+data.metadata ??= {
   name: "Vending Wars bundled PPO",
   algorithm: "PPO + greedy-expert behavior cloning",
   trainedAt: "2026-11-17",

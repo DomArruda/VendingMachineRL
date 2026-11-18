@@ -1,8 +1,11 @@
 import { chromium } from "playwright-core";
 
+const baseUrl = process.argv[2] ?? "http://127.0.0.1:5179/";
 const browser = await chromium.launch({
   headless: true,
-  executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  executablePath:
+    process.env.CHROME_PATH ??
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   args: ["--no-sandbox", "--disable-gpu"],
 });
 const page = await browser.newPage({
@@ -12,16 +15,20 @@ const page = await browser.newPage({
 const errors: string[] = [];
 page.on("pageerror", (error) => errors.push(error.message));
 
-await page.goto("http://127.0.0.1:5179/", { waitUntil: "domcontentloaded" });
+await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => {
   const play = [...document.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Play vs trained agent")
+    button.textContent?.includes("Play vs selected agent")
   );
   return play && !play.disabled;
 });
-await page.getByRole("button", { name: /Play vs trained agent/ }).click();
+await page.getByRole("button", { name: /Play vs selected agent/ }).click();
+await page.getByText("Your machine").waitFor();
 await page.getByText("Agent ready").waitFor();
-await page.getByRole("button", { name: "Stock", exact: true }).first().click();
+await page.screenshot({
+  path: "C:/Users/arrud/AppData/Local/Temp/opencode/planning-layout.png",
+});
+await page.getByRole("button", { name: "Add slot", exact: true }).first().click();
 await page.getByRole("button", { name: /Lock in/ }).click();
 await page.getByText("Skip day").waitFor();
 await page.waitForTimeout(500);

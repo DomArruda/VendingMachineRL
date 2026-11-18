@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useEffect, useState } from "react";
 import type { TrainProgress } from "../rl/algos/ppo";
 import type { WorkerDoneResult } from "../rl/protocol";
 import Chart, { moneyTick, type ChartPoint } from "../ui/Chart";
@@ -20,7 +20,9 @@ interface TrainingProps {
   trainPoints: ChartPoint[];
   greedy: number | null;
   hasModel: boolean;
-  onStart: (preset: "fast" | "standard") => void;
+  ready: boolean;
+  suggestedName: string;
+  onStart: (preset: "fast" | "standard", name: string) => void;
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
@@ -48,6 +50,8 @@ export default function Training({
   trainPoints,
   greedy,
   hasModel,
+  ready,
+  suggestedName,
   onStart,
   onPause,
   onResume,
@@ -56,8 +60,13 @@ export default function Training({
   onBack,
 }: TrainingProps) {
   const [preset, setPreset] = useState<"fast" | "standard">("fast");
+  const [policyName, setPolicyName] = useState(suggestedName);
+  const [nameEdited, setNameEdited] = useState(false);
   const running = status === "running";
   const paused = status === "paused";
+  useEffect(() => {
+    if (!nameEdited) setPolicyName(suggestedName);
+  }, [nameEdited, suggestedName]);
   const reference =
     greedy !== null
       ? { label: "Greedy expert", y: greedy, color: "#fbbf24" }
@@ -112,8 +121,25 @@ export default function Training({
                 <strong>16 games</strong>
               </div>
             </div>
-            <button className="wide primary" onClick={() => onStart(preset)}>
-              Start training
+            <label className="policy-name-field">
+              <span className="sub">Name this saved agent</span>
+              <input
+                type="text"
+                value={policyName}
+                maxLength={40}
+                onChange={(event) => {
+                  setPolicyName(event.target.value);
+                  setNameEdited(true);
+                }}
+                placeholder="PPO run 1"
+              />
+            </label>
+            <button
+              className="wide primary"
+              disabled={!ready || !policyName.trim()}
+              onClick={() => onStart(preset, policyName.trim())}
+            >
+              {ready ? "Start training" : "Loading trainer..."}
             </button>
             {hasModel && (
               <p className="sub center">
@@ -237,6 +263,7 @@ export default function Training({
               The checkpoint with the best fixed-seed evaluation is kept, so
               stopping early does not throw away a good policy.
             </p>
+            <p className="sub">Saved as: {result.policyName}</p>
             <Chart
               series={[
                 {
@@ -258,7 +285,14 @@ export default function Training({
               <button className="primary" onClick={onPlay}>
                 Play against this agent
               </button>
-              <button className="ghost" onClick={() => onStart(preset)}>
+              <button
+                className="ghost"
+                onClick={() => {
+                  setPolicyName(suggestedName);
+                  setNameEdited(false);
+                  onStart(preset, suggestedName);
+                }}
+              >
                 Train again
               </button>
             </div>

@@ -90,10 +90,10 @@ writeFileSync(
       },
       evaluation: {
         heldOutSimulations: finalSeeds,
-        meanProfit: policy.mean,
-        standardDeviation: policy.std,
-        greedyMeanProfit: greedy.mean,
-        bestTrainingEvaluation: result.bestEvalProfit,
+        heldOutMeanProfit: policy.mean,
+        heldOutProfitStdDev: policy.std,
+        greedyExpertMeanProfit: greedy.mean,
+        bestTrainingEvaluationProfit: result.bestEvalProfit,
       },
     })
   )

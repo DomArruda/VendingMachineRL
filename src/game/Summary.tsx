@@ -141,6 +141,9 @@ export function DaySummary({
           >
             {money(humanStats.profit)}
           </strong>
+          <span className="running-total">
+            Total so far: {money(cumulative(humanHistory))}
+          </span>
         </section>
         <section className="panel result-card agent">
           <span className="sub">Agent · day profit</span>
@@ -149,6 +152,9 @@ export function DaySummary({
           >
             {money(agentStats.profit)}
           </strong>
+          <span className="running-total">
+            Total so far: {money(cumulative(agentHistory))}
+          </span>
         </section>
       </div>
 
@@ -195,7 +201,7 @@ export function DaySummary({
           agent={`${agentStats.endingWarehouseUnits}`}
         />
         <StatRow
-          label="Cumulative"
+          label="Total profit so far"
           human={money(cumulative(humanHistory))}
           agent={money(cumulative(agentHistory))}
         />

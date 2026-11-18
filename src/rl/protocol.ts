@@ -1,16 +1,19 @@
 import type { PPOTrainConfig, TrainProgress } from "./algos/ppo";
 import type { RLAction } from "./action";
+import type { PolicyData, PolicyMetadata } from "./policyIO";
 
 export type WorkerTrainConfig = Omit<
   PPOTrainConfig,
   "onProgress" | "control" | "onBcEpoch"
->;
+> & { policyName: string };
 
 export type WorkerRequest =
   | { type: "train"; config: WorkerTrainConfig }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "stop" }
+  | { type: "load-pretrained" }
+  | { type: "load-policy"; name: string; policy: PolicyData }
   | {
       type: "decide";
       obs: Float32Array;
@@ -24,10 +27,13 @@ export interface WorkerDoneResult {
   greedyProfit: number;
   iterations: number;
   elapsedSec: number;
+  policyName: string;
+  policy: PolicyData;
 }
 
 export type WorkerResponse =
-  | { type: "ready"; hasModel: boolean }
+  | { type: "ready"; hasModel: boolean; metadata?: PolicyMetadata }
+  | { type: "policy-loaded"; name: string; metadata?: PolicyMetadata }
   | { type: "progress"; progress: TrainProgress }
   | { type: "bc"; epoch: number; loss: number }
   | { type: "done"; result: WorkerDoneResult }
