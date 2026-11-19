@@ -28,6 +28,16 @@ import {
 } from "./rl/policyStore";
 import type { PolicyMetadata } from "./rl/policyMetadata";
 import { CONFIG } from "./sim/config";
+import {
+  MAX_GAME_SAVES,
+  newGameSaveId,
+  readGameSaves,
+  restoreGame,
+  upsertGameSave,
+  writeGameSaves,
+  type GameProgress,
+  type GameSave,
+} from "./game/gameSaveStore";
 import type { DayStats } from "./sim/day";
 import {
   createGame,
@@ -45,6 +55,10 @@ const EMPTY_PLAN: Plan = Array.from({ length: CONFIG.SLOTS }, () => null);
 
 function randomSeed(): number {
   return Math.floor(Math.random() * 1_000_000_000);
+}
+
+function gameProgress(game: GameState): GameProgress {
+  return { day: game.day, machine: game.machine, history: game.history };
 }
 
 const BUNDLED_POLICY_ID = "__bundled_ppo__";
@@ -111,6 +125,9 @@ export default function App() {
   const [agentStats, setAgentStats] = useState<DayStats | null>(null);
   const [replay, setReplay] = useState<SceneReplay | null>(null);
   const [replaySpeed, setReplaySpeed] = useState(1);
+  const [gameSaves, setGameSaves] = useState<GameSave[]>(readGameSaves);
+  const [activeSaveId, setActiveSaveId] = useState<string | null>(null);
+  const [gameOpponentId, setGameOpponentId] = useState(BUNDLED_POLICY_ID);
 
   const workerRef = useRef<Worker | null>(null);
   const trainingStatusRef = useRef<TrainingStatus>("idle");
@@ -214,6 +231,47 @@ export default function App() {
       .finally(() => setPoliciesLoaded(true));
   }, []);
 
+  useEffect(() => {
+    try {
+      writeGameSaves(gameSaves);
+    } catch (storageError) {
+      setError(`Could not save games locally: ${storageError}`);
+    }
+  }, [gameSaves]);
+
+  useEffect(() => {
+    if (!activeSaveId || !humanGame || !agentGame) return;
+    const planning = humanStats === null && humanGame.day < CONFIG.DAYS;
+    const save: GameSave = {
+      id: activeSaveId,
+      savedAt: new Date().toISOString(),
+      seed: humanGame.seed,
+      opponentId: gameOpponentId,
+      human: gameProgress(humanGame),
+      agent: gameProgress(agentGame),
+      planning,
+      humanDecision: planning ? null : humanDecision,
+      agentDecision: planning ? null : agentDecision,
+      plan: planning ? plan : EMPTY_PLAN,
+      warehouseBuys: planning ? warehouseBuys : {},
+    };
+    setGameSaves((saves) =>
+      saves.some((existing) => existing.id === activeSaveId)
+        ? upsertGameSave(saves, save)
+        : saves
+    );
+  }, [
+    activeSaveId,
+    agentGame,
+    gameOpponentId,
+    humanGame,
+    humanStats,
+    humanDecision,
+    plan,
+    warehouseBuys,
+    agentDecision,
+  ]);
+
   function requestAgentDecision(game: GameState): Promise<RLAction | null> {
     if (!workerReady || !hasModel || !workerRef.current) {
       return Promise.resolve(null);
@@ -246,9 +304,44 @@ export default function App() {
     });
   }
 
+  function requestAgentPlan(agent: GameState): void {
+    setAgentThinking(true);
+    void requestAgentDecision(agent).then((action) => {
+      setAgentDecision(
+        action
+          ? decodeAction(agent.machine, action, currentWholesale(agent))
+          : chooseHeuristic("greedy", agent)
+      );
+      setAgentThinking(false);
+    });
+  }
+
   function beginGame(gameSeed: number): void {
+    if (gameSaves.length >= MAX_GAME_SAVES) {
+      setError(`All ${MAX_GAME_SAVES} game saves are in use. Delete one before starting a new game.`);
+      return;
+    }
     const human = createGame(gameSeed);
     const agent = createGame(gameSeed);
+    const initialPlan = planFromMachine(human.machine, currentWholesale(human));
+    const id = newGameSaveId();
+    const newSave: GameSave = {
+      id,
+      savedAt: new Date().toISOString(),
+      seed: gameSeed,
+      opponentId: activePolicy,
+      human: gameProgress(human),
+      agent: gameProgress(agent),
+      planning: true,
+      humanDecision: null,
+      agentDecision: null,
+      plan: initialPlan,
+      warehouseBuys: {},
+    };
+    setError(null);
+    setActiveSaveId(id);
+    setGameOpponentId(activePolicy);
+    setGameSaves((saves) => upsertGameSave(saves, newSave));
     setSeed(gameSeed);
     setHumanGame(human);
     setAgentGame(agent);
@@ -258,19 +351,9 @@ export default function App() {
     setAgentDecision(null);
     setReplay(null);
     setWarehouseBuys({});
-    setPlan(planFromMachine(human.machine, currentWholesale(human)));
+    setPlan(initialPlan);
     setScreen("planning");
-    setAgentThinking(true);
-    void requestAgentDecision(agent).then((action) => {
-      if (action) {
-        setAgentDecision(
-          decodeAction(agent.machine, action, currentWholesale(agent))
-        );
-      } else {
-        setAgentDecision(chooseHeuristic("greedy", agent));
-      }
-      setAgentThinking(false);
-    });
+    requestAgentPlan(agent);
   }
 
   function nextDay(): void {
@@ -283,17 +366,100 @@ export default function App() {
     setWarehouseBuys({});
     setPlan(planFromMachine(humanGame.machine, currentWholesale(humanGame)));
     setScreen("planning");
-    setAgentThinking(true);
-    void requestAgentDecision(agent).then((action) => {
-      if (action) {
-        setAgentDecision(
-          decodeAction(agent.machine, action, currentWholesale(agent))
+    requestAgentPlan(agent);
+  }
+
+  async function continueGame(save: GameSave): Promise<void> {
+    const worker = workerRef.current;
+    if (!workerReady || !worker) return;
+    setActiveSaveId(null);
+    setError(null);
+
+    let opponentId = save.opponentId;
+    if (opponentId !== activePolicy) {
+      setLoadingPolicy(true);
+      try {
+        if (opponentId === BUNDLED_POLICY_ID) {
+          worker.postMessage({ type: "load-pretrained" } satisfies WorkerRequest);
+        } else {
+          const policy = await loadSavedPolicy(opponentId);
+          if (!policy) throw new Error("That saved agent no longer exists");
+          worker.postMessage({
+            type: "load-policy",
+            name: opponentId,
+            policy,
+          } satisfies WorkerRequest);
+        }
+        setSelectedPolicy(opponentId);
+      } catch {
+        opponentId = activePolicy;
+        setSelectedPolicy(activePolicy);
+        setLoadingPolicy(false);
+        setError(
+          `Could not restore the saved opponent. Continuing with ${activePolicy === BUNDLED_POLICY_ID ? "Bundled PPO" : activePolicy}.`
         );
-      } else {
-        setAgentDecision(chooseHeuristic("greedy", agent));
       }
+    } else {
+      setSelectedPolicy(opponentId);
+    }
+
+    const human = restoreGame(save.seed, save.human);
+    const agent = restoreGame(save.seed, save.agent);
+    const planning = save.planning && human.day < CONFIG.DAYS;
+    const hasResults = !planning && human.day > 0;
+    setActiveSaveId(save.id);
+    setGameOpponentId(opponentId);
+    setSeed(save.seed);
+    setHumanGame(human);
+    setAgentGame(agent);
+    setHumanStats(
+      hasResults ? human.history[human.history.length - 1] ?? null : null
+    );
+    setAgentStats(
+      hasResults ? agent.history[agent.history.length - 1] ?? null : null
+    );
+    setHumanDecision(hasResults ? save.humanDecision : null);
+    setAgentDecision(hasResults ? save.agentDecision : null);
+    setReplay(null);
+    setReplaySpeed(1);
+    setWarehouseBuys(planning ? save.warehouseBuys : {});
+    setPlan(
+      planning
+        ? save.plan
+        : human.day >= CONFIG.DAYS
+          ? EMPTY_PLAN
+          : planFromMachine(human.machine, currentWholesale(human))
+    );
+
+    if (human.day >= CONFIG.DAYS) {
       setAgentThinking(false);
-    });
+      setScreen("final");
+    } else if (hasResults) {
+      setAgentThinking(false);
+      setScreen("summary");
+    } else {
+      setScreen("planning");
+      requestAgentPlan(agent);
+    }
+  }
+
+  function deleteGameSave(id: string): void {
+    setGameSaves((saves) => saves.filter((save) => save.id !== id));
+    if (activeSaveId === id) setActiveSaveId(null);
+  }
+
+  function clearGameSaves(): void {
+    if (
+      gameSaves.length === 0 ||
+      !window.confirm(
+        "Clear all saved games from this browser? Saved trained agents will be kept."
+      )
+    ) {
+      return;
+    }
+    setActiveSaveId(null);
+    setGameSaves([]);
+    setError(null);
   }
 
   function lockIn(): void {
@@ -538,13 +704,74 @@ export default function App() {
                   : ""}
               </p>
             )}
+            <section className="saved-games">
+              <div className="saved-games-heading">
+                <div>
+                  <h2>Saved games</h2>
+                  <small className="sub">
+                    Auto-saved in this browser · {gameSaves.length}/{MAX_GAME_SAVES}
+                  </small>
+                </div>
+                <button
+                  className="ghost"
+                  onClick={clearGameSaves}
+                  disabled={gameSaves.length === 0 || loadingPolicy}
+                  title="Clear saved game runs from this browser; saved agents are kept."
+                >
+                  Clear game saves
+                </button>
+              </div>
+              {gameSaves.length === 0 ? (
+                <p className="sub saved-games-empty">No saved games yet.</p>
+              ) : (
+                gameSaves.map((save, index) => (
+                  <div className="saved-game-row" key={save.id}>
+                    <div className="saved-game-info">
+                      <strong>
+                        Game {index + 1} · {save.human.day >= CONFIG.DAYS
+                          ? "Finished"
+                          : save.planning
+                            ? `Day ${save.human.day + 1} planning`
+                            : `Ready for day ${save.human.day + 1}`}
+                      </strong>
+                      <small>
+                        vs {save.opponentId === BUNDLED_POLICY_ID ? "Bundled PPO" : save.opponentId}
+                        {" · saved "}{new Date(save.savedAt).toLocaleString()}
+                      </small>
+                    </div>
+                    <div className="saved-game-actions">
+                      <button
+                        className="ghost"
+                        onClick={() => void continueGame(save)}
+                        disabled={!workerReady || trainingActive || loadingPolicy}
+                      >
+                        Continue
+                      </button>
+                      <button
+                        className="ghost"
+                        onClick={() => deleteGameSave(save.id)}
+                        disabled={loadingPolicy}
+                        title="Delete only this saved game."
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </section>
             <div className="button-row">
               <button
                 className="primary"
-                disabled={!canPlay}
+                disabled={!canPlay || gameSaves.length >= MAX_GAME_SAVES}
                 onClick={() => beginGame(randomSeed())}
+                title={
+                  gameSaves.length >= MAX_GAME_SAVES
+                    ? "Delete a saved game before starting another."
+                    : "Starts a new game in an available save slot."
+                }
               >
-                Play vs selected agent
+                New game
               </button>
               <button
                 className="ghost"
@@ -596,6 +823,7 @@ export default function App() {
           greedy={greedy}
           hasModel={hasModel}
           ready={workerReady && policiesLoaded}
+          canStartGame={gameSaves.length < MAX_GAME_SAVES}
           suggestedName={suggestedPolicyName}
           onStart={(preset, name) => startTraining(preset, name)}
           onPause={() => {
@@ -683,6 +911,7 @@ export default function App() {
           agentHistory={agentGame.history}
           humanMachine={humanGame.machine}
           agentMachine={agentGame.machine}
+          canStartGame={gameSaves.length < MAX_GAME_SAVES}
           onPlaySame={() => {
             if (seed !== null) beginGame(seed);
           }}

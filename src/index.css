@@ -316,6 +316,63 @@ button:disabled {
   margin: 5px 0;
 }
 
+.saved-games {
+  margin: 14px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(9, 14, 23, 0.5);
+}
+
+.saved-games-heading,
+.saved-game-row,
+.saved-game-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.saved-games-heading h2 {
+  margin: 0 0 3px;
+}
+
+.saved-games-heading button,
+.saved-game-actions button {
+  padding: 4px 7px;
+  font-size: 9px;
+}
+
+.saved-games-empty {
+  margin: 9px 0 0;
+}
+
+.saved-game-row {
+  padding: 8px 0;
+  border-top: 1px solid #182131;
+}
+
+.saved-game-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.saved-game-info strong {
+  font-size: 10px;
+}
+
+.saved-game-info small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.saved-game-actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
 /* Training */
 
 .training-card {
@@ -1034,6 +1091,11 @@ progress {
 
   .home-points {
     grid-template-columns: 1fr;
+  }
+
+  .saved-game-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .policy-picker {

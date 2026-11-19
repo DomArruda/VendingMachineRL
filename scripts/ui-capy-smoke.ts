@@ -18,11 +18,11 @@ page.on("pageerror", (error) => errors.push(error.message));
 await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
 await page.waitForFunction(() => {
   const play = [...document.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("Play vs selected agent")
+    button.textContent?.includes("New game")
   );
   return play && !play.disabled;
 });
-await page.getByRole("button", { name: /Play vs selected agent/ }).click();
+await page.getByRole("button", { name: "New game", exact: true }).click();
 await page.getByText("Your machine").waitFor();
 await page.getByText("Agent ready").waitFor();
 await page.screenshot({
@@ -71,6 +71,20 @@ if (!(await refillAll.isDisabled())) {
 }
 
 await page.getByRole("button", { name: "Add slot", exact: true }).first().click();
+
+await page.getByRole("button", { name: "Quit" }).click();
+await page.getByRole("button", { name: "Continue" }).waitFor();
+await page.screenshot({
+  path: "C:/Users/arrud/AppData/Local/Temp/opencode/home-saved-games.png",
+});
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.getByRole("button", { name: "Continue" }).click();
+await page.getByText("Your machine").waitFor();
+await page.getByText("Agent ready").waitFor();
+await page.locator(".slot").filter({ hasText: itemName })
+  .getByText("From backstock +10")
+  .waitFor();
+
 await page.getByRole("button", { name: /Lock in/ }).click();
 await page.getByText("Skip day").waitFor();
 await page.waitForTimeout(500);
@@ -85,5 +99,33 @@ await page.screenshot({
 });
 await page.getByRole("button", { name: "Skip day" }).click();
 await page.getByText("Day 1 results").waitFor();
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.getByRole("button", { name: "Continue" }).click();
+await page.getByText("Day 1 results").waitFor();
+await page.getByRole("button", { name: "Next day" }).click();
+await page.getByRole("button", { name: "Quit" }).click();
+
+const newGame = page.getByRole("button", { name: "New game", exact: true });
+for (let i = 0; i < 2; i++) {
+  await newGame.click();
+  await page.getByText("Your machine").waitFor();
+  await page.getByRole("button", { name: "Quit" }).click();
+}
+await page.getByText("Auto-saved in this browser · 3/3").waitFor();
+if (!(await newGame.isDisabled())) {
+  throw new Error("New game stayed enabled with three saved games");
+}
+await page.getByRole("button", { name: "Delete", exact: true }).first().click();
+await page.getByText("Auto-saved in this browser · 2/3").waitFor();
+if (await newGame.isDisabled()) {
+  throw new Error("Deleting a save did not free a slot for a new game");
+}
+
+page.once("dialog", (dialog) => void dialog.accept());
+await page.getByRole("button", { name: "Clear game saves" }).click();
+await page.getByText("No saved games yet.").waitFor();
+await page.waitForFunction(
+  () => window.localStorage.getItem("vending-wars-game-saves-v1") === null
+);
 console.log("replay and skip ok; errors:", errors);
 await browser.close();

@@ -20,7 +20,7 @@ await page.goto(pathToFileURL(filePath).href, { waitUntil: "domcontentloaded" })
 await page.getByText("Custom saved agents are stored only in this browser.").waitFor({
   timeout: 60000,
 });
-await page.getByRole("button", { name: /Play vs selected agent/ }).click();
+await page.getByRole("button", { name: "New game", exact: true }).click();
 await page.getByText("Agent ready").waitFor();
 await page.getByRole("button", { name: /Lock in/ }).click();
 await page.getByRole("button", { name: "Skip day" }).click();

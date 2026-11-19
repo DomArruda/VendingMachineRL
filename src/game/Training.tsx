@@ -21,6 +21,7 @@ interface TrainingProps {
   greedy: number | null;
   hasModel: boolean;
   ready: boolean;
+  canStartGame: boolean;
   suggestedName: string;
   onStart: (preset: "fast" | "standard", name: string) => void;
   onPause: () => void;
@@ -51,6 +52,7 @@ export default function Training({
   greedy,
   hasModel,
   ready,
+  canStartGame,
   suggestedName,
   onStart,
   onPause,
@@ -282,7 +284,12 @@ export default function Training({
               format={moneyTick}
             />
             <div className="button-row">
-              <button className="primary" onClick={onPlay}>
+              <button
+                className="primary"
+                onClick={onPlay}
+                disabled={!canStartGame}
+                title={!canStartGame ? "Delete a saved game before starting another." : undefined}
+              >
                 Play against this agent
               </button>
               <button

@@ -243,6 +243,7 @@ interface FinalReportProps {
   agentHistory: DayStats[];
   humanMachine: MachineState;
   agentMachine: MachineState;
+  canStartGame: boolean;
   onPlaySame: () => void;
   onNewSeed: () => void;
   onHome: () => void;
@@ -253,6 +254,7 @@ export function FinalReport({
   agentHistory,
   humanMachine,
   agentMachine,
+  canStartGame,
   onPlaySame,
   onNewSeed,
   onHome,
@@ -329,10 +331,20 @@ export function FinalReport({
           <button className="ghost" onClick={onHome}>
             Home
           </button>
-          <button className="ghost" onClick={onPlaySame}>
+          <button
+            className="ghost"
+            onClick={onPlaySame}
+            disabled={!canStartGame}
+            title={!canStartGame ? "Delete a saved game before starting another." : undefined}
+          >
             Replay this market
           </button>
-          <button className="primary" onClick={onNewSeed}>
+          <button
+            className="primary"
+            onClick={onNewSeed}
+            disabled={!canStartGame}
+            title={!canStartGame ? "Delete a saved game before starting another." : undefined}
+          >
             New market
           </button>
         </div>
